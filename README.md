@@ -14,8 +14,8 @@
     $ sudo apt install python3-dev python3-venv build-essential
 
 6. Export Dev env as below to fetch dev OKTA configs
-    $ export OKTA_API_TOKEN="00ZdcRd4znTik54Yiw3Es9vkCDe8IIGEwlVagnVd3i"
-    $ export OKTA_DOMAIN="demo-dev-deployments.okta.com"
+    $ export OKTA_API_TOKEN="<token_here>"
+    $ export OKTA_DOMAIN="<domain_name>"
 
 7. Execute Python script to fetch dev configs
     $ python final_dev_till_auth_server.py
