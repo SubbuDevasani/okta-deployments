@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 ROOT_REPO_PATH = os.path.abspath("./OKTA")
 INDEX_PATH = os.path.join(ROOT_REPO_PATH, "index.json")
 
-TF_OUT_DIR = os.path.abspath("./tf_inputs")
+TF_OUT_DIR = os.path.abspath("./terraform-okta/tf_inputs")
 SAML_TFVARS_PATH = os.path.join(TF_OUT_DIR, "saml_apps.tfvars")
 OIDC_TFVARS_PATH = os.path.join(TF_OUT_DIR, "oauth_apps.tfvars")
 

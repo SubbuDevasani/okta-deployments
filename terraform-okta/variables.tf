@@ -1,6 +1,6 @@
 variable "okta_org_name" {
   description = "Okta organization name"
-  default = "<okta_org_name>"
+  default = "demo-dev-env"
 }
 
 variable "okta_base_url" {
@@ -11,7 +11,7 @@ variable "okta_base_url" {
 variable "okta_api_token" {
   description = "Okta API token"
   sensitive   = true
-  default = "<token_here>"
+  default = "009KFW-BoYnyIt9lESU3dOMsSfXsc6FUV3UJjK3yZH"
 }
 
 # MAIN VARIABLE – controls N number of apps
