@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # ========== CONFIG ==========
-INPUT_DIR = Path("./apps_configs")          # <-- folder containing your JSON files
-OUTPUT_DIR = Path("./tf_inputs")        # <-- where tfvars will be written
+INPUT_DIR = Path("./combined-apps")      # <-- main folder containing subfolders (native/saml/service/spa/web/...)
+OUTPUT_DIR = Path("./out_tfvars")
 
 SAML_OUT = OUTPUT_DIR / "saml_data.tfvars"
 OAUTH_OUT = OUTPUT_DIR / "oauth_data.tfvars"
@@ -15,26 +15,17 @@ OAUTH_OUT = OUTPUT_DIR / "oauth_data.tfvars"
 
 
 def get_path(obj: Any, path: str, default: Any = None) -> Any:
-    """
-    Safe getter for nested dict/list using dot-path with optional [index], e.g.:
-      "application.settings.oauthClient.grant_types"
-      "authorizationServers[0].policy.name"
-      "authorizationServers[0].rules[0].conditions.grantTypes.include"
-    """
     cur = obj
     for part in path.split("."):
-        m = re.fullmatch(r"([^\[\]]+)(\[(\d+)\])?", part)
+        m = re.fullmatch(r"([^{{{{\[\]]+)(\[(\d+)\]}}}})?", part)
         if not m:
             return default
         key = m.group(1)
         idx = m.group(3)
 
-        if isinstance(cur, dict):
-            if key not in cur:
-                return default
-            cur = cur[key]
-        else:
+        if not isinstance(cur, dict) or key not in cur:
             return default
+        cur = cur[key]
 
         if idx is not None:
             if not isinstance(cur, list):
@@ -47,10 +38,6 @@ def get_path(obj: Any, path: str, default: Any = None) -> Any:
 
 
 def to_tf_key(label: str) -> str:
-    """
-    Turn a label like 'APP3535693-PCF RELEASE' into 'APP3535693_PCF_RELEASE'.
-    Ensures key is a valid Terraform-ish identifier (letters/digits/_), not starting with digit.
-    """
     s = (label or "").strip()
     if not s:
         s = "UNNAMED_APP"
@@ -116,7 +103,6 @@ def extract_saml_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     key = to_tf_key(label)
 
     signon = get_path(doc, "application.settings.signOn", {}) or {}
-    # Map Okta JSON fields -> tfvars fields (your requested names)
     app = {
         "label": label or None,
         "sso_acs_url": signon.get("ssoAcsUrl"),
@@ -132,7 +118,6 @@ def extract_saml_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         "digest_algorithm": signon.get("digestAlgorithm"),
         "honor_force_authn": signon.get("honorForceAuthn"),
         "authn_context_class_ref": signon.get("authnContextClassRef"),
-        # If you truly always want [], replace the next line with []
         "attribute_statements": signon.get("attributeStatements") if isinstance(signon.get("attributeStatements"), list) else [],
     }
     return key, app
@@ -144,8 +129,6 @@ def extract_oidc_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
 
     oauth_settings = get_path(doc, "application.settings.oauthClient", {}) or {}
     oauth_creds = get_path(doc, "application.credentials.oauthClient", {}) or {}
-
-    # Authorization server block (take first item; adjust if you need multiple)
     auth0 = get_path(doc, "authorizationServers[0]", {}) or {}
 
     app = {
@@ -157,7 +140,6 @@ def extract_oidc_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         "post_logout_redirect_uris": oauth_settings.get("post_logout_redirect_uris") if isinstance(oauth_settings.get("post_logout_redirect_uris"), list) else [],
         "consent_method": oauth_settings.get("consent_method"),
         "issuer_mode": oauth_settings.get("issuer_mode"),
-        # Per your requirement: null if missing
         "refresh_token_rotation": get_path(doc, "application.settings.oauthClient.refresh_token.rotation_type", None),
         "token_endpoint_auth_method": oauth_creds.get("token_endpoint_auth_method"),
         "authserver_name": get_path(auth0, "server.name", None),
@@ -183,15 +165,16 @@ def main() -> None:
     oidc_apps: Dict[str, Dict[str, Any]] = {}
     used_saml_keys, used_oidc_keys = set(), set()
 
-    json_files = sorted([p for p in INPUT_DIR.glob("*.json") if p.is_file()])
+    # Recursive scan through all subfolders
+    json_files = sorted([p for p in INPUT_DIR.rglob("*.json") if p.is_file()])
     if not json_files:
-        raise SystemExit(f"No .json files found in: {INPUT_DIR.resolve()}")
+        raise SystemExit(f"No .json files found under: {INPUT_DIR.resolve()}")
 
     for p in json_files:
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"[WARN] Skipping unreadable JSON: {p.name} ({e})")
+            print(f"[WARN] Skipping unreadable JSON: {p} ({e})")
             continue
 
         mode = get_path(doc, "application.signOnMode", None)
@@ -204,11 +187,12 @@ def main() -> None:
             k = dedupe_key(k, used_oidc_keys)
             oidc_apps[k] = app
         else:
-            print(f"[WARN] Skipping {p.name}: unsupported signOnMode={mode!r}")
+            print(f"[WARN] Skipping {p}: unsupported signOnMode={mode!r}")
 
     write_tfvars_map("saml_apps", saml_apps, SAML_OUT)
     write_tfvars_map("oidc_apps", oidc_apps, OAUTH_OUT)
 
+    print(f"[OK] Read {len(json_files)} JSON files under {INPUT_DIR.resolve()}")
     print(f"[OK] Wrote {len(saml_apps)} SAML apps -> {SAML_OUT.resolve()}")
     print(f"[OK] Wrote {len(oidc_apps)} OIDC apps -> {OAUTH_OUT.resolve()}")
 
