@@ -60,6 +60,10 @@ def dedupe_key(key: str, used: set) -> str:
 
 
 def hcl_escape_string(s: str) -> str:
+    # Escape Terraform interpolation in tfvars: ${...} -> $${...} (don't double-escape $${...})
+    s = re.sub(r"(?<!\$)\$\{", "$${", s)
+
+    # Standard escaping for HCL strings
     return (
         s.replace("\\", "\\\\")
          .replace('"', '\\"')
@@ -147,7 +151,6 @@ def extract_oidc_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
 
     auth_entry = select_auth_server_block(doc, app_id)
 
-    # pick first rule if present
     rules = auth_entry.get("rules") if isinstance(auth_entry.get("rules"), list) else []
     rule0 = rules[0] if rules and isinstance(rules[0], dict) else {}
 
