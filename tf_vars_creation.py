@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # ========== CONFIG ==========
-INPUT_DIR = Path("./combined-apps")      # <-- main folder containing subfolders (native/saml/service/spa/web/...)
-OUTPUT_DIR = Path("./out_tfvars")
+INPUT_DIR = Path("./apps_configs")      # main folder containing subfolders
+OUTPUT_DIR = Path("./tf_inputs")
 
 SAML_OUT = OUTPUT_DIR / "saml_data.tfvars"
 OAUTH_OUT = OUTPUT_DIR / "oauth_data.tfvars"
@@ -17,7 +17,7 @@ OAUTH_OUT = OUTPUT_DIR / "oauth_data.tfvars"
 def get_path(obj: Any, path: str, default: Any = None) -> Any:
     cur = obj
     for part in path.split("."):
-        m = re.fullmatch(r"([^{{{{\[\]]+)(\[(\d+)\]}}}})?", part)
+        m = re.fullmatch(r"([^\[\]]+)(\[(\d+)\])?", part)
         if not m:
             return default
         key = m.group(1)
@@ -38,14 +38,10 @@ def get_path(obj: Any, path: str, default: Any = None) -> Any:
 
 
 def to_tf_key(label: str) -> str:
-    s = (label or "").strip()
-    if not s:
-        s = "UNNAMED_APP"
+    s = (label or "").strip() or "UNNAMED_APP"
     s = s.upper()
     s = re.sub(r"[^A-Z0-9_]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    if not s:
-        s = "UNNAMED_APP"
+    s = re.sub(r"_+", "_", s).strip("_") or "UNNAMED_APP"
     if re.match(r"^\d", s):
         s = f"APP_{s}"
     return s
@@ -91,11 +87,28 @@ def to_hcl(value: Any, indent: int = 0, step: int = 2) -> str:
     if isinstance(value, dict):
         if not value:
             return "{}"
-        lines = []
-        for k, v in value.items():
-            lines.append(f"{' ' * (indent + step)}{k} = {to_hcl(v, indent + step, step)}")
+        lines = [f"{' ' * (indent + step)}{k} = {to_hcl(v, indent + step, step)}" for k, v in value.items()]
         return "{\n" + "\n".join(lines) + "\n" + sp + "}"
     raise TypeError(f"Unsupported type: {type(value)}")
+
+
+def select_auth_server_block(doc: Dict[str, Any], app_id: Optional[str]) -> Dict[str, Any]:
+    """
+    Returns the most relevant authorizationServers entry for this app.
+    Preference: entry whose policy.conditions.clients.include contains app_id.
+    Fallback: first entry. If missing/empty: {}.
+    """
+    auth_servers = doc.get("authorizationServers")
+    if not isinstance(auth_servers, list) or not auth_servers:
+        return {}
+
+    if app_id:
+        for entry in auth_servers:
+            include = get_path(entry, "policy.conditions.clients.include", [])
+            if isinstance(include, list) and app_id in include:
+                return entry
+
+    return auth_servers[0] if isinstance(auth_servers[0], dict) else {}
 
 
 def extract_saml_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
@@ -127,9 +140,16 @@ def extract_oidc_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     label = get_path(doc, "application.label", "") or ""
     key = to_tf_key(label)
 
+    app_id = get_path(doc, "application.id", None)
+
     oauth_settings = get_path(doc, "application.settings.oauthClient", {}) or {}
     oauth_creds = get_path(doc, "application.credentials.oauthClient", {}) or {}
-    auth0 = get_path(doc, "authorizationServers[0]", {}) or {}
+
+    auth_entry = select_auth_server_block(doc, app_id)
+
+    # pick first rule if present
+    rules = auth_entry.get("rules") if isinstance(auth_entry.get("rules"), list) else []
+    rule0 = rules[0] if rules and isinstance(rules[0], dict) else {}
 
     app = {
         "label": label or None,
@@ -142,10 +162,10 @@ def extract_oidc_app(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         "issuer_mode": oauth_settings.get("issuer_mode"),
         "refresh_token_rotation": get_path(doc, "application.settings.oauthClient.refresh_token.rotation_type", None),
         "token_endpoint_auth_method": oauth_creds.get("token_endpoint_auth_method"),
-        "authserver_name": get_path(auth0, "server.name", None),
-        "auth_policy_name": get_path(auth0, "policy.name", None),
-        "auth_policy_rule_name": get_path(auth0, "rules[0].name", None),
-        "auth_grant_type_whitelist": get_path(auth0, "rules[0].conditions.grantTypes.include", []) or [],
+        "authserver_name": get_path(auth_entry, "server.name", None),
+        "auth_policy_name": get_path(auth_entry, "policy.name", None),
+        "auth_policy_rule_name": rule0.get("name"),
+        "auth_grant_type_whitelist": get_path(rule0, "conditions.grantTypes.include", []) or [],
     }
     return key, app
 
@@ -165,7 +185,6 @@ def main() -> None:
     oidc_apps: Dict[str, Dict[str, Any]] = {}
     used_saml_keys, used_oidc_keys = set(), set()
 
-    # Recursive scan through all subfolders
     json_files = sorted([p for p in INPUT_DIR.rglob("*.json") if p.is_file()])
     if not json_files:
         raise SystemExit(f"No .json files found under: {INPUT_DIR.resolve()}")
